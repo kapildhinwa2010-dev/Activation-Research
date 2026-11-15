@@ -1,11 +1,17 @@
 # Activation-Research - Research framework for activation-compression studies
 # Part of the Kapildhinwa2010-dev Toolkit.
 
-"""ActivationNet - activation compression and analysis.
+"""Activation-Research: method-comparison studies over activation matrices.
 
-Lineage: Reverse.Dean (behave_yourself.py). Collects layer activations and
-compresses them with SVD, PCA or random projections; reports reconstruction
-error and retained variance so behavior can be studied cheaply.
+Lineage: Reverse.Dean (behave_yourself.py). The core compression primitives
+(SVD / PCA / random projection) are shared with Activation-Lib; this module
+adds the research layer: sweep a rank curve, compare methods at equal
+stored size, and emit a results table with reconstruction error and
+retained variance per configuration.
+
+Limitations (honest scope):
+- Metrics are computed on the SAME matrix used to fit the basis, so they
+  measure in-sample reconstruction, not transfer to new activations.
 """
 
 from __future__ import annotations
@@ -105,3 +111,66 @@ def retained_variance(s: np.ndarray, rank: int) -> float:
     if total == 0.0:
         return 1.0
     return float((s[:rank] ** 2).sum() / total)
+
+
+def rank_sweep(matrix: np.ndarray, ranks) -> list:
+    """Truncated-SVD error/variance across a curve of ranks.
+
+    Returns one dict per rank: {rank, error, retained_variance}.
+    """
+    matrix = _check_matrix(matrix)
+    rows = []
+    for rank in ranks:
+        if rank < 1:
+            raise ValueError("ranks must be >= 1")
+        u, s, vt = svd_compress(matrix, rank)
+        approx = (u * s) @ vt
+        rows.append({
+            "rank": int(rank),
+            "error": reconstruction_error(matrix, approx),
+            "retained_variance": retained_variance(s, rank),
+        })
+    return rows
+
+
+def compare_methods(matrix: np.ndarray, stored_fraction: float = 0.25) -> dict:
+    """Compare SVD, PCA and random projection at equal stored size.
+
+    Each method is given the same compressed width k so the stored
+    size is comparable. Returns {method: {error, retained_variance}}.
+    Random projection is included for reference: at equal k it usually
+    loses to SVD/PCA on structured matrices - that gap is the point of
+    the comparison, not a bug.
+    """
+    matrix = _check_matrix(matrix)
+    if not 0.0 < stored_fraction < 1.0:
+        raise ValueError("stored_fraction must be in (0, 1)")
+    k = max(1, int(round(matrix.shape[1] * stored_fraction)))
+
+    results = {}
+
+    u, s, vt = svd_compress(matrix, k)
+    svd_approx = (u * s) @ vt
+    results["svd"] = {
+        "error": reconstruction_error(matrix, svd_approx),
+        "retained_variance": retained_variance(s, k),
+    }
+
+    scores, _mean, _vecs = pca_compress(matrix, k)
+    _s, _m, vecs = pca_compress(matrix, k)
+    pca_approx = scores @ vecs.T + _m
+    pca_total = float((matrix ** 2).sum())
+    pca_err = float(((matrix - pca_approx) ** 2).sum())
+    results["pca"] = {
+        "error": pca_err / max(pca_total, 1e-12),
+        "retained_variance": 1.0 - pca_err / max(pca_total, 1e-12),
+    }
+
+    projected, projection = random_project(matrix, k)
+    # least-squares reconstruction back to the original space
+    recovered = projected @ np.linalg.pinv(projection)
+    results["random"] = {
+        "error": reconstruction_error(matrix, recovered),
+        "retained_variance": 1.0 - reconstruction_error(matrix, recovered),
+    }
+    return results
