@@ -24,6 +24,9 @@ __all__ = [
     "pca_compress",
     "random_project",
     "reconstruction_error",
+    "retained_variance",
+    "rank_sweep",
+    "compare_methods",
 ]
 
 
@@ -156,9 +159,8 @@ def compare_methods(matrix: np.ndarray, stored_fraction: float = 0.25) -> dict:
         "retained_variance": retained_variance(s, k),
     }
 
-    scores, _mean, _vecs = pca_compress(matrix, k)
-    _s, _m, vecs = pca_compress(matrix, k)
-    pca_approx = scores @ vecs.T + _m
+    scores, mean, vecs = pca_compress(matrix, k)
+    pca_approx = scores @ vecs.T + mean
     pca_total = float((matrix ** 2).sum())
     pca_err = float(((matrix - pca_approx) ** 2).sum())
     results["pca"] = {
